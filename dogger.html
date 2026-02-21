@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dogger Deluxe - Ultimate Arcade</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+
+<style>
+body {
+    margin: 0;
+    background: black;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    color: #00ff00;
+    font-family: 'Press Start 2P', monospace;
+    overflow: hidden;
+}
+
+#game-ui {
+    margin-bottom: 12px;
+    font-size: 12px;
+    text-shadow: 0 0 6px #00ff00;
+}
+
+#canvas-wrapper {
+    position: relative;
+}
+
+canvas {
+    border: 6px solid #00ff00;
+    background-color: #000;
+    image-rendering: pixelated;
+}
+* { box-sizing: border-box; }
+
+/* CRT Scanlines */
+#canvas-wrapper::after {
+    content: "";
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        rgba(0,0,0,0.25) 0px,
+        rgba(0,0,0,0.25) 2px,
+        transparent 2px,
+        transparent 4px
+    );
+}
+
+#overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0,0,0,0.9);
+    color: #0f0;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 14px;
+    text-align: center;
+    z-index: 999;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+#menu {
+    display: flex;
+    position: fixed;
+    top:0;
+    left:0;
+    width:100vw;
+    height:100vh;
+    background:black;
+    color:#0f0;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index:1000;
+}
+
+.btn {
+    padding: 10px 20px;
+    background: #00ff00;
+    color: black;
+    border: none;
+    font-family: 'Press Start 2P', monospace;
+    font-weight: bold;
+    cursor: pointer;
+    margin-top: 10px;
+}
+
+#footer {
+    margin-top: 15px;
+    font-size: 10px;
+    text-align: center;
+    border-top: 2px solid #00ff00;
+    padding-top: 10px;
+    line-height: 1.6;
+}
+</style>
+</head>
+
+<body>
+
+<div id="menu">
+    <h1>Dogger Deluxe</h1>
+    <p>Ultimate Arcade</p>
+    <button class="btn" onclick="startGame()">START GAME</button>
+    <div style="margin-top:20px; font-size:12px;">
+        ⬆ ⬇ ⬅ ➡ MOVE DOG<br>
+        SPACE = BARK (STUN CARS)<br>
+        REACH MAILMAN TO LEVEL UP<br>
+        AVOID CARS & DOG CATCHER
+    </div>
+</div>
+
+<div id="game-ui">
+LEVEL: <span id="lvl">1</span> |
+SCORE: <span id="score">0</span> |
+BARKS: <span id="barks">0</span>
+</div>
+
+<div id="canvas-wrapper">
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<!-- PAUSE OVERLAY -->
+<div id="overlay">
+    <h2 id="status-text">PAUSED</h2>
+    <div style="color: #aaa; margin-bottom: 15px;">
+        ARROWS: Move Dog | SPACE: Bark (Stun Cars)<br>
+        P: Toggle Pause | ESC: Reset
+    </div>
+    <button class="btn" onclick="togglePause()">RESUME</button>
+</div>
+
+<div id="footer">
+⬆ ⬇ ⬅ ➡ MOVE DOG<br>
+SPACE = BARK (STUN CARS)<br>
+REACH MAILMAN TO LEVEL UP<br>
+AVOID CARS & DOG CATCHER
+</div>
+
+<script>
+// ================= CANVAS SETUP =================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const GRID = 40;
+const COLS = 11;
+const ROWS = 13;
+
+canvas.width = COLS * GRID;
+canvas.height = ROWS * GRID;
+
+const ROAD_LANES = [2,3,4,5,7,8,9,10];
+
+let level = 1;
+let score = 0;
+let barkPower = 0;
+
+let cars = [];
+let rocks = [];
+let hydrants = [];
+let dogCatcher = null;
+let levelStartTime = 0;
+
+const overlay = document.getElementById('overlay');
+const menu = document.getElementById('menu');
+let paused = false;
+
+// ================= PLAYER =================
+const player = {
+    x: 5,
+    y: 12,
+    draw() {
+        let px = this.x * GRID;
+        let py = this.y * GRID;
+
+        ctx.fillStyle="#8B5A2B"; // tail
+        ctx.fillRect(px+2,py+18,6,6);
+
+        ctx.fillStyle="#D2B48C"; // body
+        ctx.fillRect(px+10,py+12,20,18);
+        ctx.fillRect(px+14,py+6,12,12); // head
+
+        ctx.fillStyle="red"; // collar
+        ctx.fillRect(px+14,py+16,12,3);
+
+        ctx.fillStyle="black"; // eyes
+        ctx.fillRect(px+16,py+10,3,3);
+        ctx.fillRect(px+21,py+10,3,3);
+    }
+};
+
+// ================= MAILMAN =================
+const mailman = {
+    x: 5,
+    y: 0,
+    draw(){
+        let px=this.x*GRID;
+        let py=this.y*GRID;
+
+        ctx.fillStyle="#4169E1"; // uniform
+        ctx.fillRect(px+10,py+14,20,20);
+
+        ctx.fillStyle="#ffe0bd"; // face
+        ctx.fillRect(px+14,py+6,12,12);
+
+        ctx.fillStyle="brown"; // bag
+        ctx.fillRect(px+28,py+18,8,12);
+    }
+};
+
+// ================= VEHICLES =================
+class Vehicle {
+    constructor(row,speed){
+        this.row=row;
+        this.speed=speed;
+        this.x=Math.random()*canvas.width;
+        this.width=GRID*1.5;
+        this.color=`hsl(${Math.random()*360},70%,50%)`;
+        this.stunned=false;
+    }
+
+    update(){
+        if(this.stunned || paused) return;
+        this.x+=this.speed;
+        if(this.speed>0 && this.x>canvas.width) this.x=-this.width;
+        if(this.speed<0 && this.x<-this.width) this.x=canvas.width;
+    }
+
+    draw(){
+        let y=this.row*GRID;
+
+        ctx.fillStyle=this.stunned ? "#00ffff" : this.color;
+        ctx.fillRect(this.x,y+10,this.width,GRID-20);
+
+        ctx.fillStyle="#aee";
+        ctx.fillRect(this.x+8,y+14,this.width-16,8);
+
+        ctx.fillStyle="black";
+        ctx.fillRect(this.x+8,y+GRID-12,10,6);
+        ctx.fillRect(this.x+this.width-18,y+GRID-12,10,6);
+    }
+}
+
+// ================= DOG CATCHER =================
+class DogCatcher{
+    constructor(){
+        this.x=Math.floor(Math.random()*COLS);
+        this.y=0;
+        this.timer=0;
+    }
+
+    update(delta){
+        this.timer+=delta;
+        if(this.timer>500){
+            this.timer=0;
+            if(player.x>this.x)this.x++;
+            else if(player.x<this.x)this.x--;
+            if(player.y>this.y)this.y++;
+            else if(player.y<this.y)this.y--;
+        }
+    }
+
+    draw(){
+        let px=this.x*GRID;
+        let py=this.y*GRID;
+
+        ctx.fillStyle="#555";
+        ctx.fillRect(px+12,py+14,16,18);
+
+        ctx.fillStyle="#888";
+        ctx.fillRect(px+14,py+6,12,12);
+
+        ctx.fillStyle="black";
+        ctx.fillRect(px+12,py+2,16,6);
+
+        ctx.strokeStyle="white";
+        ctx.beginPath();
+        ctx.arc(px+30,py+20,8,0,Math.PI*2);
+        ctx.stroke();
+    }
+}
+
+// ================= LEVEL INIT =================
+function initLevel(){
+    cars=[];
+    rocks=[];
+    hydrants=[];
+    dogCatcher=null;
+    levelStartTime=performance.now();
+
+    // Add hydrants
+    let hyRowOptions = [1,6,11];
+    let hyRow = hyRowOptions[Math.floor(Math.random()*hyRowOptions.length)];
+    let hyX = Math.floor(Math.random()*COLS);
+
+    hydrants.push({x: hyX, y: hyRow, spraying:false, lastSprayTime:0, direction:"up"});
+
+    ROAD_LANES.forEach(row=>{
+        let speed=(Math.random()*1.5+1)*(row%2===0?1:-1)*(1+level*0.1);
+        cars.push(new Vehicle(row,speed));
+    });
+
+    [1,6,11].forEach(row=>{
+        for(let i=0;i<2;i++){
+            let rx=Math.floor(Math.random()*COLS);
+            if(rx!==5) rocks.push({x:rx,y:row});
+        }
+    });
+
+    mailman.x=Math.floor(Math.random()*COLS);
+    player.x=5;
+    player.y=12;
+}
+
+// ================= INPUT =================
+window.addEventListener("keydown",e=>{
+    if(e.key.toLowerCase()==="p"){ togglePause(); return; }
+    if(paused) return;
+
+    let nx=player.x;
+    let ny=player.y;
+
+    if(e.key==="ArrowUp")ny--;
+    if(e.key==="ArrowDown")ny++;
+    if(e.key==="ArrowLeft")nx--;
+    if(e.key==="ArrowRight")nx++;
+
+    if(e.key===" " && barkPower>0){
+        barkPower--;
+        cars.forEach(c=>{
+            c.stunned=true;
+            setTimeout(()=>c.stunned=false,2000);
+        });
+    }
+
+    if(nx>=0 && nx<COLS && ny>=0 && ny<ROWS){
+        if(!rocks.some(r=>r.x===nx && r.y===ny)){
+            player.x=nx;
+            player.y=ny;
+        }
+    }
+});
+
+// ================= PAUSE =================
+function togglePause(){
+    paused=!paused;
+    overlay.style.display=paused?"flex":"none";
+}
+
+// ================= START GAME =================
+function startGame(){
+    menu.style.display="none";
+    paused = false;          // <--- ensure game is unpaused
+    overlay.style.display = "none";  // hide overlay if ever visible
+    initLevel();
+    gameLoop();
+}
+
+// ================= GAME LOOP =================
+function gameLoop(timestamp){
+    if(paused) {
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    let delta = timestamp-(gameLoop.last||timestamp);
+    gameLoop.last = timestamp;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // draw background
+    for(let r=0;r<ROWS;r++){
+        if(ROAD_LANES.includes(r)){
+            ctx.fillStyle="#111";
+            ctx.fillRect(0,r*GRID,canvas.width,GRID);
+
+            ctx.fillStyle="yellow";
+            for(let x=0;x<canvas.width;x+=40){
+                ctx.fillRect(x+10,r*GRID+18,20,4);
+            }
+        } else {
+            ctx.fillStyle="#003300";
+            ctx.fillRect(0,r*GRID,canvas.width,GRID);
+        }
+    }
+
+    // rocks
+    ctx.fillStyle="#777";
+    rocks.forEach(r=>ctx.fillRect(r.x*GRID+10,r.y*GRID+10,20,20));
+
+    // cars
+    cars.forEach(car=>{
+        car.update();
+        car.draw();
+
+        if(player.y===car.row){
+            let px=player.x*GRID;
+            if(px+GRID>car.x && px<car.x+car.width){
+                level=1; score=0; barkPower=0; initLevel();
+            }
+        }
+    });
+
+    // dog catcher
+    if(level>=3 && !dogCatcher && performance.now()-levelStartTime>10000){
+        dogCatcher=new DogCatcher();
+    }
+    if(dogCatcher){
+        dogCatcher.update(delta);
+        dogCatcher.draw();
+        if(dogCatcher.x===player.x && dogCatcher.y===player.y){
+            level=1; score=0; barkPower=0; initLevel();
+        }
+    }
+
+    // hydrants
+    hydrants.forEach(h=>{
+        const now = performance.now();
+
+        if(!h.spraying && now-h.lastSprayTime>3000){
+            const dirs = ["up","down","left","right"];
+            h.direction = dirs[Math.floor(Math.random()*dirs.length)];
+            h.spraying=true;
+            h.lastSprayTime=now;
+        }
+
+        if(h.spraying && now-h.lastSprayTime>1000){
+            h.spraying=false;
+            h.lastSprayTime=now;
+        }
+
+        let px=h.x*GRID;
+        let py=h.y*GRID;
+
+        // draw hydrant
+        ctx.fillStyle="red";
+        ctx.fillRect(px+12,py+12,16,16);
+
+        ctx.fillStyle="silver";
+        ctx.fillRect(px+8,py+8,24,6);
+
+        if(h.spraying){
+            ctx.fillStyle="#00ccff";
+            let streamTiles=[];
+
+            if(h.direction==="up"){ ctx.fillRect(px+18,py-80,4,80); streamTiles=[{x:h.x,y:h.y-1},{x:h.x,y:h.y-2}]; }
+            if(h.direction==="down"){ ctx.fillRect(px+18,py+GRID,4,80); streamTiles=[{x:h.x,y:h.y+1},{x:h.x,y:h.y+2}]; }
+            if(h.direction==="left"){ ctx.fillRect(px-80,py+18,80,4); streamTiles=[{x:h.x-1,y:h.y},{x:h.x-2,y:h.y}]; }
+            if(h.direction==="right"){ ctx.fillRect(px+GRID,py+18,80,4); streamTiles=[{x:h.x+1,y:h.y},{x:h.x+2,y:h.y}]; }
+
+            streamTiles.forEach(tile=>{
+                if(player.x===tile.x && player.y===tile.y){
+                    let pushX=player.x;
+                    let pushY=player.y;
+                    if(h.direction==="up") pushY--;
+                    if(h.direction==="down") pushY++;
+                    if(h.direction==="left") pushX--;
+                    if(h.direction==="right") pushX++;
+
+                    if(pushX>=0 && pushX<COLS && pushY>=0 && pushY<ROWS && !rocks.some(r=>r.x===pushX && r.y===pushY)){
+                        player.x=pushX;
+                        player.y=pushY;
+                    }
+                }
+            });
+        }
+    });
+
+    // mailman
+    if(player.x===mailman.x && player.y===mailman.y){
+        level++; score+=100; barkPower++; initLevel();
+    }
+
+    mailman.draw();
+    player.draw();
+
+    document.getElementById("lvl").innerText=level;
+    document.getElementById("score").innerText=score;
+    document.getElementById("barks").innerText=barkPower;
+
+    requestAnimationFrame(gameLoop);
+}
+</script>
+
+</body>
+</html>
